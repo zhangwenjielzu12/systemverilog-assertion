@@ -188,7 +188,7 @@ and可以逻辑地组合两个序列。两个序列必须具有相同的起始�
 implication是允许定义前提条件的一项技术,含**只在时钟边沿检验前提条件一次**，然后就开始检验后续算子部分，因此它**不检测先行算子是否一直保持为真**。
 ``` systemverilog
     (expression) throughout (sequence definition)
-``  `
+```
 **在整个检查过程中，expression应该保持为真**  
 
 ### "within"构造
@@ -196,4 +196,73 @@ within构造允许在一个序列中定义另一个序列
 ```seq1 within seq2 ```
 这表示seq1在seq2的开始到结束的范围内发生，且序列seq2的开始匹配点必须在seq1的开始匹配点之前发生，序列seq1的结束匹配点必须在seq2的结束匹配点之前结束
 
+### 内建的系统函数
 
+1. $onehot(expression)  换句话说，就是在任意给定的时钟沿，表达式只有一位为高。
+2.  $onehot0(expression) 检验表达式满足“zero one-hot”，换句话说，就是在任意给定的时钟沿，表达式只有一位为高或者没有任何位为高
+3. $isunknown(expression)—— 检验表达式的任何位是否是X或者Z。
+4. $countones(expression)—— 计算向量中为高的位的数量
+
+
+### disable iff 构造
+在某些设计情况中，如果一些条件为真，则我们不想执行检验。换句话说，这就像是一个异步的复位，使得检验在当前时刻不工作。SVA提供了关键词“disable iff”来实现这种检验器的异步复位 
+``` systemverilog 
+disable iff (expression) < property definition>
+```
+当property definition为真时，我们不想检验expression
+### 使用intersect控制序列的长度
+``` systemverilog
+property p35;
+(@(posedge clk) 1[*2:5] intersect
+                (a ##[1:$] b ##[1:$] c));
+endproperty
+
+a35： assert property(p35);
+```
+这可以使用带1[*2:5]的intersect运算符来加以约束。这个intersect的定义检查从序列的有效开始点(信号“a”为高)，到序列成功的结束点(信号“c”为高)，一共经过2~5个时钟周期 
+
+### 在属性中使用形参
+可以用定义形参的方式来重用一些常用的属性
+SVA 允许使用属性的形参来定义时钟。这样，属性可以应用在使用不同时钟的相似设计模块中
+``` systemverilog
+property arb (a，b，c，d);
+    @(posedge clk) 
+    ($fell(a) ##[2:5] $fell(b)) |->
+    ##1 ($fell(c) && $fell(d)) ##0
+    (!c&&!d) [*4] ##1 (c&&d) ##1 b;
+endproperty
+```
+
+### 嵌套的蕴含
+``` systemverilog
+`define free (a && b && c && d)
+property p_nest;
+    @(posedge clk) $fell(a) |->
+    ##1 (!b && !c && !d) |->
+    ##[6：10]
+    `free;
+endproperty
+
+a_nest： assert property(p_nest);
+```
+
+### 在蕴含中使用if/else
+SVA 允许在使用蕴含的属性的后续算子中使用“if/else”语句。
+``` systemverilog
+property p_if_else;
+@(posedge clk)
+    ($fell(start) ##1 (a||b)) |->
+    if(a)
+        (c[->2] ##1 e)
+    else
+          (d[->2] ##1 f);
+endproperty
+                
+a_if_else： assert property(p_if_else);
+```
+### SVA中的多时钟定义
+SVA 允许序列或者属性使用多个时钟定义来采样独立的信号或者子序列。SVA 会自动地同步不同信号或子序列使用的时钟域。  
+**当在一个序列中使用了多个时钟信号时，只允许使用“##1”延迟构造**
+**使用“##0”会产生混淆，即在信号“a”匹配后究竟哪个时钟信号才是最近的时钟。这将引起竞争，因此不允许使用。使用##2也不允许，因为不可能同步到时钟“clk2”的最近的上升沿。**  
+**禁止在两个不同时钟驱动的序列之间使用交叠蕴含运算符。因为先行算子的结束和后续算子的开始重叠，可能引起竞争的情况，这是非法的。**  
+可以使用非交叠蕴含(|=>)

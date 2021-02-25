@@ -266,3 +266,92 @@ SVA 允许序列或者属性使用多个时钟定义来采样独立的信号或�
 **使用“##0”会产生混淆，即在信号“a”匹配后究竟哪个时钟信号才是最近的时钟。这将引起竞争，因此不允许使用。使用##2也不允许，因为不可能同步到时钟“clk2”的最近的上升沿。**  
 **禁止在两个不同时钟驱动的序列之间使用交叠蕴含运算符。因为先行算子的结束和后续算子的开始重叠，可能引起竞争的情况，这是非法的。**  
 可以使用非交叠蕴含(|=>)
+### matched构造
+任何时候如果一个序列定义了多个时钟，构造“matched”可以用来监测第一个子序列的结束点。
+``` systemverilog
+sequence s_a;
+    @(posedge clk1) $rose(a);
+endsequence
+sequence s_b;
+    @(posedge clk2) $rose(b);
+endsequence
+property p_match;
+    @(posedge clk2) s_a.matched |=> s_b;
+endproperty
+
+a_match： assert property(p_match);
+```
+理解“matched”构造的使用方法的关键在于，**被采样到的匹配的值一直被保存到另一个序列最近的下一个时钟边沿**
+### expect构造
+与verilog中的等待构造相似，关键的区别在于expect语句等待的是属性的成功检验，expect构造后面的语句是作为一个阻塞语句来执行的。
+``` systemverilog
+initial begin 
+    @(posedge clk);
+    #2ns cpu_ready = 1'b1 ;
+    expect ( (@posedge clk) ##[1:16 ] memory_ready == 1'b1 ) 
+    $display("Hand shake successful\n");
+    else begin 
+    $display("Hand shake failed： exiting\n")
+    $finish();
+    end
+
+    for(i=0; i<64; i++) begin
+        send_packet();
+        $display("PACKET %0d sent\n"，i);
+    end
+end
+```
+### 使用局部变量的SVA
+在序列或者属性中可以定义局部变量，而且可以对这种变量赋值
+``` systemverilog
+property p_local_var1 ;
+int var1 ;
+@(posedge clk)
+( $rose(enable1),var1 = a ) |-> 
+##4 （ aa == (var1*var1*var1) ;
+endproperty 
+```
+可以在SVA中保存和操作局部变量
+### 在序列匹配时调用子程序
+SVA 可以在序列每次成功匹配时调用子程序。同一序列中定义的局部变量可以作为参数传给这些子程序。对于序列的每次匹配，子程序调用的执行与它们在序列定义中的顺序相同  
+-[ ] 这里说的子程序是什么意义？ (在书中可以看到这里的子程序可以是sequence)
+### 将SVA与设计链接
+1. 在module定义中内建或者内联检验器( SVA代码可以内建在module定义的任何地方)
+2. 将检验器与module、module instance等绑定
+    如果用户决定将SVA 检验器与设计代码分离，那么就需要建立一个独立的检验器模块。定义独立的检验器模块，增强了检验器的可重用性
+
+``` systemverilog
+module mutex_chk(a,b,clk);
+input logic a,b,clk;
+property p_muxtex;
+    @(posedge clk) not (a && b);
+endproperty 
+
+a_muxtex: assert property(p_muxtex);
+endmodule 
+```
+**定义检验器模块时，它是一个独立的实体。检验器用来检验一组通用的信号，检验器可以与设计中任何的module或者instance绑定**
+
+``` systemverilog
+bind <module_name or instance_name> 
+    <checker name ><checker instance name > 
+    <design signals> ;
+// eg 
+bind inline muxtex_chk i2 (a,b,clk);
+```
+
+- [ ] 与module bind相比instrance bind有什么区别？
+与检验器绑定的设计信号可以包含绑定实例中的任何信号的跨模块引用(cross module reference)
+### SVA与功能覆盖率
+功能覆盖是按照设计规范来衡量验证状态的一个标准，可以分为两类：
+1. 协议覆盖
+2. 测试计划覆盖
+
+断言可以用来获得有关协议覆盖的穷举信息。sva提供了关键词**cover**来实现这个功能
+``` <cover_name> : cover property(property_name);```
+cover 语句的结果包含下面的信息：
+1. 属性被尝试检验的次数。
+2. 属性成功的次数。
+3. 属性失败的次数。
+4. 属性空成功的次数。
+就像断言(assert)语句一样，覆盖(cover)语句可以有执行块。在一个覆盖成功匹配时，可以调用一个函数(function)或者任务(task)，或者更新一个局部变量
